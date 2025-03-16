@@ -1,0 +1,55 @@
+# Jupiter API Configuration
+jupiter:
+  min_volume_usd: 100000  # Minimum 24h volume in USD
+  min_liquidity_score: 0.7  # Minimum liquidity score (0-1)
+  max_slippage: 0.01  # Maximum allowed slippage
+  
+# Trading Parameters
+trading:
+  initial_capital: 1000000  # Initial capital in USD
+  position_size: 0.02  # Position size as percentage of portfolio (2%)
+  max_positions: 10  # Maximum number of concurrent positions
+  stop_loss: 0.05  # Stop loss percentage (5%)
+  take_profit: 0.15  # Take profit percentage (15%)
+  
+# Strategy Parameters
+strategy:
+  momentum_lookback: 24  # Hours for momentum calculation
+  rsi_period: 14  # Period for RSI calculation
+  rsi_overbought: 70  # RSI overbought threshold
+  rsi_oversold: 30  # RSI oversold threshold
+  volume_ma_period: 24  # Volume moving average period
+  
+# Risk Management
+risk:
+  max_drawdown: 0.15  # Maximum allowed drawdown
+  daily_var_limit: 0.02  # Daily Value at Risk limit
+  position_var_limit: 0.01  # Per-position Value at Risk limit
+  
+# Platform Settings
+platforms:
+  jupiter:
+    fee_rate: 0.0035  # 0.35% fee
+    min_order_size: 10  # Minimum order size in USD
+    priority: 1  # Platform priority for execution
+  raydium:
+    fee_rate: 0.003  # 0.3% fee
+    min_order_size: 10
+    priority: 2
+  openbook:
+    fee_rate: 0.002  # 0.2% fee
+    min_order_size: 10
+    priority: 3
+  
+# Backtest Settings
+backtest:
+  data_resolution: "1h"  # Data resolution
+  include_fees: true  # Include trading fees
+  include_slippage: true  # Include slippage
+  plot_results: true  # Generate plots
+  max_tokens_per_category: 3  # Limit tokens per category to control API usage
+  run_test_first: true  # Run a small test before full backtest
+
+# Logging
+logging:
+  level: "DEBUG"  # Enable DEBUG for more detailed information 

@@ -1,0 +1,89 @@
+{
+  "new_launches": {
+    "total_return": 0.0,
+    "sharpe_ratio": NaN,
+    "max_drawdown": 0.0,
+    "win_rate": 0.0,
+    "platform_metrics": {
+      "jupiter": {
+        "total_trades": 0,
+        "total_volume": 0,
+        "total_fees": 0,
+        "avg_slippage": 0,
+        "avg_liquidity_score": 0
+      },
+      "raydium": {
+        "total_trades": 0,
+        "total_volume": 0,
+        "total_fees": 0,
+        "avg_slippage": 0,
+        "avg_liquidity_score": 0
+      },
+      "openbook": {
+        "total_trades": 0,
+        "total_volume": 0,
+        "total_fees": 0,
+        "avg_slippage": 0,
+        "avg_liquidity_score": 0
+      }
+    }
+  },
+  "recent_tokens": {
+    "total_return": 0.0,
+    "sharpe_ratio": NaN,
+    "max_drawdown": 0.0,
+    "win_rate": 0.0,
+    "platform_metrics": {
+      "jupiter": {
+        "total_trades": 0,
+        "total_volume": 0,
+        "total_fees": 0,
+        "avg_slippage": 0,
+        "avg_liquidity_score": 0
+      },
+      "raydium": {
+        "total_trades": 0,
+        "total_volume": 0,
+        "total_fees": 0,
+        "avg_slippage": 0,
+        "avg_liquidity_score": 0
+      },
+      "openbook": {
+        "total_trades": 0,
+        "total_volume": 0,
+        "total_fees": 0,
+        "avg_slippage": 0,
+        "avg_liquidity_score": 0
+      }
+    }
+  },
+  "established_tokens": {
+    "total_return": 0.0,
+    "sharpe_ratio": NaN,
+    "max_drawdown": 0.0,
+    "win_rate": 0.0,
+    "platform_metrics": {
+      "jupiter": {
+        "total_trades": 0,
+        "total_volume": 0,
+        "total_fees": 0,
+        "avg_slippage": 0,
+        "avg_liquidity_score": 0
+      },
+      "raydium": {
+        "total_trades": 0,
+        "total_volume": 0,
+        "total_fees": 0,
+        "avg_slippage": 0,
+        "avg_liquidity_score": 0
+      },
+      "openbook": {
+        "total_trades": 0,
+        "total_volume": 0,
+        "total_fees": 0,
+        "avg_slippage": 0,
+        "avg_liquidity_score": 0
+      }
+    }
+  }
+}

@@ -1,0 +1,72 @@
+# ML-Enhanced Trading Strategy Configuration
+
+# Backtest settings
+backtest:
+  use_ml_strategy: true
+  initial_capital: 10000  # $10,000 starting capital
+  validation_split: 0.3   # Use 30% of data for validation
+
+# ML model configuration
+ml:
+  # Model type: 'classification' (predicts up/down) or 'regression' (predicts return value)
+  model_type: "classification"
+  
+  # Target prediction horizon (hours ahead to predict)
+  target_horizon: 6
+  
+  # Weight for ML predictions vs traditional indicators (0-1)
+  prediction_weight: 0.7
+  
+  # Minimum confidence threshold for generating signals (0-1)
+  confidence_threshold: 0.65
+  
+  # Whether to use ML for exit predictions
+  use_stoploss_prediction: true
+  
+  # Feature engineering settings
+  lookback_periods: [8, 24, 72]  # Periods for features
+  
+  # Model hyperparameters
+  hyperparameters:
+    n_estimators: 100
+    max_depth: 10
+    min_samples_split: 10
+    learning_rate: 0.05
+  
+  # Model saving/loading
+  model_dir: "models/saved"
+  save_models: true
+  load_existing: true
+
+# Trading parameters
+trading:
+  # Position sizing
+  position_size: 0.05          # 5% of portfolio per position
+  max_positions: 5             # Maximum number of simultaneous positions
+  
+  # Exit parameters
+  stop_loss: 0.07              # 7% stop loss
+  take_profit: 0.20            # 20% take profit
+  trailing_stop: 0.05          # 5% trailing stop
+  max_hold_time: 72            # 72 hours maximum hold time
+  min_hold_time: 2             # 2 hours minimum hold time
+  
+  # Entry parameters
+  vol_threshold: 0.03          # 3% volatility threshold
+  entry_confirmation: 1        # Number of confirmations needed
+  position_scaling: true       # Enable scaling in/out of positions
+  
+  # Risk management
+  max_daily_risk: 0.02         # Maximum 2% portfolio risk per day
+  max_drawdown_exit: 0.15      # Exit all positions if drawdown exceeds 15%
+  
+# Platform settings
+platforms:
+  jupiter:
+    fee_rate: 0.0035          # 0.35% fee
+    
+# Debug flags
+debug:
+  log_ml_predictions: true
+  save_feature_importance: true
+  show_model_metrics: true 

@@ -1,0 +1,12 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+# Techstack
+-python for the backend
+-html/js for the frontend
+-SQL databases, never JSON file storage
+- separate databases for dev, test, and prod
+-python tests

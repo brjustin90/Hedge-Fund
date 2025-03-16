@@ -1,0 +1,69 @@
+system:
+  mode: "live"  # Options: backtest, paper, live
+  log_level: "INFO"
+  initial_capital: 500
+  loop_interval: 60  # seconds
+
+data:
+  price_update_interval: 60  # seconds
+  sentiment_update_interval: 3600  # seconds
+  onchain_update_interval: 300  # seconds
+  max_token_age_days: 365  # maximum age of tokens to consider
+  min_token_age_days: 1  # minimum age of tokens to consider
+  min_liquidity_usd: 100000  # minimum liquidity in USD
+  min_volume_24h_usd: 50000  # minimum 24h volume in USD
+
+risk:
+  max_position_size: 0.25  # 25% of portfolio max
+  default_stop_loss: 0.05  # 5% stop loss
+  max_drawdown_limit: 0.20  # 20% max drawdown
+  max_correlation: 0.7  # maximum correlation between positions
+  position_sizing:
+    base_size: 0.1  # 10% of portfolio as base position size
+    max_size: 0.25  # 25% maximum position size
+    min_size: 0.02  # 2% minimum position size
+
+strategies:
+  trend_following:
+    enabled: true
+    weight: 0.3
+    short_ma_period: 20
+    long_ma_period: 50
+    
+  mean_reversion:
+    enabled: true
+    weight: 0.2
+    lookback_period: 20
+    entry_threshold: 2.0
+    
+  momentum:
+    enabled: true
+    weight: 0.3
+    rsi_period: 14
+    momentum_period: 10
+    
+  liquidity:
+    enabled: true
+    weight: 0.2
+    min_liquidity_ratio: 0.8
+
+claude:
+  enabled: true
+  max_tokens: 1500
+  temperature: 0.2
+  sentiment_weight: 0.3  # weight of Claude's sentiment in decision making
+
+execution:
+  max_slippage: 0.01  # 1% maximum slippage
+  retry_attempts: 3
+  retry_delay: 5  # seconds
+
+monitoring:
+  telegram_alerts: true
+  email_alerts: false
+  performance_update_interval: 3600  # seconds
+
+database:
+  type: "sqlite"  # Options: sqlite, timescaledb
+  path: "market_data.db"  # for sqlite
+  # connection_string: "postgresql://user:pass@localhost:5432/dbname"  # for timescaledb 

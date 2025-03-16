@@ -1,0 +1,77 @@
+# Backtest Configuration
+
+# Test parameters
+test_tokens:
+  - SOL
+  - RAY
+  - BONK
+  - SAMO
+  - ORCA
+
+# Time parameters
+backtest_period_days: 30
+data_resolution: '1h'  # 1 hour candles
+
+# Trading parameters
+initial_capital: 10000  # USD
+position_size_pct: 0.1  # 10% of capital per trade
+max_positions: 3  # Maximum number of concurrent positions
+stop_loss_pct: 0.05  # 5% stop loss
+take_profit_pct: 0.15  # 15% take profit
+
+# Platform settings
+platform: 'jupiter'
+base_fee: 0.0003  # 0.03% Jupiter base fee
+min_liquidity_score: 0.3  # Minimum liquidity score to trade
+min_volume_usd: 100000  # Minimum 24h volume in USD
+
+# Risk management
+max_drawdown_pct: 0.15  # Maximum allowed drawdown
+risk_per_trade_pct: 0.01  # 1% risk per trade
+volatility_lookback: 24  # Hours for volatility calculation
+
+# Model settings
+feature_engineering:
+  price_features:
+    - returns
+    - log_returns
+    - volatility
+    - rsi
+    - macd
+    - bollinger_bands
+  volume_features:
+    - volume_ma
+    - vwap
+    - volume_momentum
+  liquidity_features:
+    - liquidity_score
+    - spread
+    - depth
+
+model_params:
+  type: 'ensemble'
+  models:
+    - name: 'xgboost'
+      weight: 0.6
+      params:
+        max_depth: 6
+        learning_rate: 0.1
+        n_estimators: 100
+    - name: 'lstm'
+      weight: 0.4
+      params:
+        layers: [64, 32]
+        dropout: 0.2
+        epochs: 50
+
+# Strategy weights
+strategy_weights:
+  trend_following: 0.4
+  mean_reversion: 0.3
+  momentum: 0.2
+  liquidity: 0.1
+
+# Logging and output
+log_level: 'INFO'
+save_trades: true
+plot_results: true 
