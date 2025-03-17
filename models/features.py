@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional
 import logging
+import ta
 
 logger = logging.getLogger(__name__)
 
@@ -10,7 +11,7 @@ class FeatureEngineering:
     
     def __init__(self, config: Dict = None):
         self.config = config or {}
-        self.lookback_periods = self.config.get('lookback_periods', [8, 24, 72])
+        self.lookback_periods = self.config.get('lookback_periods', [3, 6, 12, 24])
         
     def create_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -23,115 +24,166 @@ class FeatureEngineering:
             DataFrame with engineered features
         """
         if df.empty:
-            logger.warning("Empty dataframe provided for feature engineering")
-            return pd.DataFrame()
+            logger.warning("Empty DataFrame provided")
+            return df
             
-        # Ensure we have timestamp as a column
-        if 'timestamp' not in df.columns:
-            if df.index.name == 'timestamp':
-                df = df.reset_index()
-            else:
-                logger.warning("No timestamp column found in data")
-                return pd.DataFrame()
-                
+        # Ensure required columns exist
+        required_cols = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+        if not all(col in df.columns for col in required_cols):
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            raise ValueError(f"Missing required columns: {missing_cols}")
+            
         # Sort by timestamp
-        df = df.sort_values('timestamp')
+        df = df.sort_values('timestamp').copy()
         
-        # Use price column if available, otherwise close
-        price_col = 'price' if 'price' in df.columns else 'close'
-        if price_col not in df.columns:
-            logger.warning(f"No price or close column found in data")
-            return pd.DataFrame()
-            
-        features = df.copy()
+        # Price-based features
+        self._add_price_features(df)
         
-        # Price momentum features
+        # Volume-based features
+        self._add_volume_features(df)
+        
+        # Pattern-based features
+        self._add_pattern_features(df)
+        
+        # Trend-based features
+        self._add_trend_features(df)
+        
+        # Technical indicators
+        self._add_technical_indicators(df)
+        
+        # Drop rows with NaN values
+        df = df.dropna()
+        
+        return df
+        
+    def _add_price_features(self, df: pd.DataFrame) -> None:
+        """Add price-based features"""
+        # Returns over different periods
         for period in self.lookback_periods:
-            # Returns over period
-            features[f'return_{period}'] = features[price_col].pct_change(period)
+            df[f'price_return_{period}'] = df['close'].pct_change(period)
+            df[f'price_high_return_{period}'] = df['high'].pct_change(period)
+            df[f'price_low_return_{period}'] = df['low'].pct_change(period)
             
-            # Volatility over period
-            features[f'volatility_{period}'] = features[price_col].pct_change().rolling(period).std()
+        # Price volatility
+        for period in self.lookback_periods:
+            df[f'price_volatility_{period}'] = df['close'].pct_change().rolling(period).std()
             
-            # Moving averages
-            features[f'ma_{period}'] = features[price_col].rolling(period).mean()
-            
-            # Distance from moving average
-            features[f'ma_dist_{period}'] = (features[price_col] / features[f'ma_{period}'] - 1)
-            
-            # Price acceleration (change in returns)
-            features[f'accel_{period}'] = features[f'return_{period}'].diff()
-            
-        # Volume features
-        if 'volume' in features.columns:
-            for period in self.lookback_periods:
-                # Volume momentum
-                features[f'vol_change_{period}'] = features['volume'].pct_change(period)
-                
-                # Volume moving average
-                features[f'vol_ma_{period}'] = features['volume'].rolling(period).mean()
-                
-                # Volume relative to moving average
-                features[f'vol_ma_ratio_{period}'] = features['volume'] / features[f'vol_ma_{period}']
-                
-                # Price-volume correlation
-                features[f'price_vol_corr_{period}'] = features[price_col].rolling(period).corr(features['volume'])
+        # Price momentum
+        df['price_momentum'] = df['close'] - df['close'].rolling(12).mean()
+        df['price_acceleration'] = df['price_momentum'].diff()
         
-        # Liquidity features
-        if 'liquidity_score' in features.columns:
-            for period in self.lookback_periods:
-                # Liquidity trend
-                features[f'liq_change_{period}'] = features['liquidity_score'].pct_change(period)
+        # Candlestick features
+        df['candle_body'] = df['close'] - df['open']
+        df['candle_upper_shadow'] = df['high'] - df[['open', 'close']].max(axis=1)
+        df['candle_lower_shadow'] = df[['open', 'close']].min(axis=1) - df['low']
+        df['candle_size'] = df['high'] - df['low']
+        
+    def _add_volume_features(self, df: pd.DataFrame) -> None:
+        """Add volume-based features"""
+        # Volume changes
+        for period in self.lookback_periods:
+            df[f'volume_change_{period}'] = df['volume'].pct_change(period)
+            
+        # Volume moving averages
+        for period in self.lookback_periods:
+            df[f'volume_ma_{period}'] = df['volume'].rolling(period).mean()
+            
+        # Volume price trend
+        df['volume_price_trend'] = df['volume'] * df['close'].pct_change().abs()
+        
+        # Volume intensity
+        df['volume_intensity'] = df['volume'] / df['volume'].rolling(20).mean()
+        
+    def _add_pattern_features(self, df: pd.DataFrame) -> None:
+        """Add pattern-based features"""
+        # Swing detection
+        for period in self.lookback_periods:
+            df[f'pattern_swing_high_{period}'] = (
+                df['high'].rolling(period, center=True).apply(
+                    lambda x: 1 if x.iloc[len(x)//2] == max(x) else 0
+                )
+            )
+            df[f'pattern_swing_low_{period}'] = (
+                df['low'].rolling(period, center=True).apply(
+                    lambda x: 1 if x.iloc[len(x)//2] == min(x) else 0
+                )
+            )
+            
+        # Support and resistance levels
+        for period in self.lookback_periods:
+            df[f'pattern_support_{period}'] = df['low'].rolling(period).min()
+            df[f'pattern_resistance_{period}'] = df['high'].rolling(period).max()
+            
+        # Price levels
+        for period in self.lookback_periods:
+            pivot = (df['high'].rolling(period).max() + 
+                    df['low'].rolling(period).min() + 
+                    df['close'].rolling(period).mean()) / 3
+            df[f'pattern_pivot_{period}'] = pivot
+            
+        # Breakout detection
+        for period in self.lookback_periods:
+            resistance = df['high'].rolling(period).max()
+            support = df['low'].rolling(period).min()
+            df[f'pattern_breakout_{period}'] = (
+                ((df['close'] > resistance.shift(1)) & (df['volume'] > df['volume'].rolling(period).mean())).astype(int) -
+                ((df['close'] < support.shift(1)) & (df['volume'] > df['volume'].rolling(period).mean())).astype(int)
+            )
+            
+    def _add_trend_features(self, df: pd.DataFrame) -> None:
+        """Add trend-based features"""
+        # Moving averages
+        for period in self.lookback_periods:
+            df[f'trend_ma_{period}'] = df['close'].rolling(period).mean()
+            
+        # Moving average crossovers
+        for i, period1 in enumerate(self.lookback_periods[:-1]):
+            for period2 in self.lookback_periods[i+1:]:
+                ma1 = df['close'].rolling(period1).mean()
+                ma2 = df['close'].rolling(period2).mean()
+                df[f'trend_ma_cross_{period1}_{period2}'] = (ma1 > ma2).astype(int)
                 
-                # Liquidity moving average
-                features[f'liq_ma_{period}'] = features['liquidity_score'].rolling(period).mean()
+        # Micro trend detection
+        df['trend_micro'] = (
+            (df['close'] > df['close'].rolling(3).mean()) &
+            (df['close'].rolling(3).mean() > df['close'].rolling(6).mean())
+        ).astype(int)
         
-        # Time-based features
-        features['hour'] = features['timestamp'].dt.hour
-        features['day_of_week'] = features['timestamp'].dt.dayofweek
+        # Volatility regime
+        df['trend_volatility_regime'] = pd.qcut(
+            df['close'].pct_change().rolling(20).std(),
+            q=3,
+            labels=['low', 'medium', 'high']
+        )
         
-        # RSI (Relative Strength Index)
-        for period in [14, 28]:
-            delta = features[price_col].diff()
-            gain = delta.where(delta > 0, 0)
-            loss = -delta.where(delta < 0, 0)
-            
-            avg_gain = gain.rolling(period).mean()
-            avg_loss = loss.rolling(period).mean()
-            
-            rs = avg_gain / avg_loss.replace(0, np.nan)
-            features[f'rsi_{period}'] = 100 - (100 / (1 + rs))
+    def _add_technical_indicators(self, df: pd.DataFrame) -> None:
+        """Add technical indicators"""
+        # RSI
+        df['tech_rsi'] = ta.momentum.RSIIndicator(df['close']).rsi()
+        
+        # MACD
+        macd = ta.trend.MACD(df['close'])
+        df['tech_macd'] = macd.macd()
+        df['tech_macd_signal'] = macd.macd_signal()
+        df['tech_macd_diff'] = macd.macd_diff()
         
         # Bollinger Bands
-        for period in [20, 40]:
-            features[f'bb_middle_{period}'] = features[price_col].rolling(period).mean()
-            features[f'bb_std_{period}'] = features[price_col].rolling(period).std()
-            features[f'bb_upper_{period}'] = features[f'bb_middle_{period}'] + 2 * features[f'bb_std_{period}']
-            features[f'bb_lower_{period}'] = features[f'bb_middle_{period}'] - 2 * features[f'bb_std_{period}']
-            features[f'bb_width_{period}'] = (features[f'bb_upper_{period}'] - features[f'bb_lower_{period}']) / features[f'bb_middle_{period}']
-            features[f'bb_pct_{period}'] = (features[price_col] - features[f'bb_lower_{period}']) / (features[f'bb_upper_{period}'] - features[f'bb_lower_{period}'])
+        bollinger = ta.volatility.BollingerBands(df['close'])
+        df['tech_bb_high'] = bollinger.bollinger_hband()
+        df['tech_bb_mid'] = bollinger.bollinger_mavg()
+        df['tech_bb_low'] = bollinger.bollinger_lband()
         
-        # MACD (Moving Average Convergence Divergence)
-        short_window = 12
-        long_window = 26
-        signal_window = 9
+        # Average True Range
+        df['tech_atr'] = ta.volatility.AverageTrueRange(
+            df['high'], df['low'], df['close']
+        ).average_true_range()
         
-        features['macd_short_ma'] = features[price_col].ewm(span=short_window, adjust=False).mean()
-        features['macd_long_ma'] = features[price_col].ewm(span=long_window, adjust=False).mean()
-        features['macd_line'] = features['macd_short_ma'] - features['macd_long_ma']
-        features['macd_signal'] = features['macd_line'].ewm(span=signal_window, adjust=False).mean()
-        features['macd_histogram'] = features['macd_line'] - features['macd_signal']
-        
-        # Target variable for prediction (future returns)
-        for horizon in [1, 3, 6, 12, 24]:
-            features[f'future_return_{horizon}'] = features[price_col].pct_change(horizon).shift(-horizon)
-            # Binary targets for classification
-            features[f'target_up_{horizon}'] = (features[f'future_return_{horizon}'] > 0).astype(int)
-        
-        # Drop NaN values 
-        features = features.dropna(subset=[col for col in features.columns if col.startswith('future_return_')])
-        
-        return features
+        # Stochastic Oscillator
+        stoch = ta.momentum.StochasticOscillator(
+            df['high'], df['low'], df['close']
+        )
+        df['tech_stoch_k'] = stoch.stoch()
+        df['tech_stoch_d'] = stoch.stoch_signal()
         
     def select_features(self, features: pd.DataFrame, target_column: str = 'future_return_6') -> pd.DataFrame:
         """

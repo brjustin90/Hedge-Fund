@@ -1,0 +1,24 @@
+{
+    "initial_capital": 1000.0,
+    "signals": {
+        "RAYDIUM_PVSSOL_98NOCL.USD": {
+            "signal": -1,
+            "confidence": 0.7492290017801535
+        },
+        "CRYPTO_PWEASEUSD": {
+            "signal": 1,
+            "confidence": 0.53
+        },
+        "RAYDIUM_YZYSOL_969WMQ.USD": {
+            "signal": 0,
+            "confidence": 0
+        }
+    },
+    "tokens_analyzed": 3,
+    "total_signals": 2,
+    "long_signals": 1,
+    "short_signals": 1,
+    "pnl": -112.71874078616486,
+    "final_capital": 887.2812592138351,
+    "total_return": -0.11271874078616484
+}

@@ -1,0 +1,41 @@
+{
+    "initial_capital": 10000,
+    "position_size_pct": 0.1,
+    "max_positions": 3,
+    "stop_loss_pct": 0.02,
+    "take_profit_pct": 0.04,
+    "trailing_stop_pct": 0.015,
+    "min_profit_to_trail": 0.02,
+    
+    "ml_strategy_params": {
+        "prediction_weight": 0.6,
+        "pattern_weight": 0.4,
+        "confidence_threshold": 0.7,
+        "min_pattern_score": 0.6,
+        "lookback_periods": [3, 6, 12, 24],
+        "feature_importance_threshold": 0.02
+    },
+    
+    "pattern_params": {
+        "swing_threshold": 0.008,
+        "breakout_threshold": 0.012,
+        "volume_spike_threshold": 2.0,
+        "micro_trend_periods": 3,
+        "support_resistance_lookback": 24
+    },
+    
+    "risk_management": {
+        "max_drawdown_pct": 0.15,
+        "daily_loss_limit_pct": 0.05,
+        "max_correlation": 0.7,
+        "min_volatility": 0.001,
+        "max_volatility": 0.05
+    },
+    
+    "execution": {
+        "entry_timeout_bars": 3,
+        "exit_timeout_bars": 2,
+        "min_bars_between_trades": 6,
+        "max_spread_pct": 0.01
+    }
+} 

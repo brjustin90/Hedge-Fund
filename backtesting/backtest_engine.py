@@ -59,308 +59,157 @@ class BacktestEngine:
         # Create directories for model saving
         os.makedirs('models/saved', exist_ok=True)
         
-    async def run_backtest(
-        self,
-        start_date: datetime,
-        end_date: datetime,
-        data_collector,
-        tokens: List[str]
-    ) -> Dict:
-        """Run backtest on historical data"""
-        try:
-            logger.info(f"Starting backtest for {len(tokens)} tokens from {start_date} to {end_date}")
+    def run_backtest(self, token_data: Dict[str, pd.DataFrame], train_end: datetime, test_end: datetime) -> Dict:
+        """
+        Run a backtest using the provided data and strategy
+        
+        Args:
+            token_data: Dictionary mapping token names to their price data
+            train_end: End date for training period (strategy will be trained on data up to this date)
+            test_end: End date for testing period
             
-            results = {
-                'total_return': 0,
-                'sharpe_ratio': 0,
-                'max_drawdown': 0,
-                'win_rate': 0,
-                'platform_metrics': {}
-            }
-            
-            if not tokens:
-                logger.warning("No tokens provided for backtest")
-                return results
-                
-            # Initialize portfolio
-            portfolio = {
-                'cash': self.initial_capital,
-                'positions': {},
-                'total_value': self.initial_capital,
-                'history': []
-            }
-            
-            # Initialize signal history
-            self.signal_history = {token: {'buy_signals': 0, 'last_signal_time': None} for token in tokens}
-            
-            # Collect historical data for all tokens - with batch processing
+        Returns:
+            Dictionary containing backtest results
+        """
+        logger.info("Starting backtest")
+        
+        # Combine data from all tokens
             all_data = []
-            token_data_dict = {}  # Dictionary to store data for ML training
-            batch_size = 5  # Process tokens in batches to avoid overwhelming API
-            for i in range(0, len(tokens), batch_size):
-                batch_tokens = tokens[i:i+batch_size]
-                batch_tasks = []
-                
-                # Create tasks for parallel execution
-                for token in batch_tokens:
-                    task = asyncio.create_task(self._collect_token_data(token, start_date, end_date, data_collector))
-                    batch_tasks.append(task)
-                
-                # Wait for all tasks in batch to complete
-                batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
-                
-                # Process results
-                for j, result in enumerate(batch_results):
-                    if isinstance(result, Exception):
-                        logger.error(f"Error in data collection: {result}")
-                        continue
-                    if result is not None:  # Only add valid data
-                        all_data.append(result)
-                        token = batch_tokens[j]
-                        token_data_dict[token] = result
+        for token, df in token_data.items():
+            # Add token column if not present
+            if 'token' not in df.columns:
+                df = df.copy()
+                df['token'] = token
+            all_data.append(df)
                         
             if not all_data:
-                logger.warning("No data collected for any tokens")
-                return results
+            logger.error("No data provided for backtest")
+            return {'portfolio_history': []}
                 
-            # Combine all data
-            logger.info(f"Combining data from {len(all_data)} tokens")
-            data = pd.concat(all_data, ignore_index=False)
+        # Combine data and sort by timestamp
+        combined_data = pd.concat(all_data)
             
             # Check if timestamp is in the index or as a column
-            if 'timestamp' not in data.columns and data.index.name == 'timestamp':
-                # Reset index to make timestamp a column
-                data = data.reset_index()
-            elif 'timestamp' not in data.columns and isinstance(data.index, pd.DatetimeIndex):
-                # If we have a DatetimeIndex but it's not named 'timestamp'
-                data = data.reset_index()
-                data.rename(columns={'index': 'timestamp'}, inplace=True)
+        if 'timestamp' not in combined_data.columns and isinstance(combined_data.index, pd.DatetimeIndex):
+            # If we have a DatetimeIndex, reset it to make timestamp a column
+            combined_data = combined_data.reset_index()
+            combined_data.rename(columns={'index': 'timestamp'}, inplace=True)
                 
             # Sort by timestamp
-            try:
-                data = data.sort_values('timestamp')
-            except KeyError as e:
-                logger.error(f"Error in backtest: {str(e)}")
-                return results
-                
-            logger.info(f"Combined data shape: {data.shape}")
-            
-            # Train ML models if enabled
-            if self.use_ml_strategy:
-                logger.info("Training ML models with historical data")
-                self.ml_strategy.train_models(token_data_dict)
-            
-            # Process each timestamp
-            logger.info(f"Processing unique timestamps: {data['timestamp'].nunique()}")
-            timestamps = data['timestamp'].unique()
+        combined_data = combined_data.sort_values('timestamp')
+        
+        logger.info(f"Combined data shape: {combined_data.shape}")
+        logger.info(f"Timespan: {combined_data['timestamp'].min()} to {combined_data['timestamp'].max()}")
+        logger.info(f"Unique timestamps: {combined_data['timestamp'].nunique()}")
             
             # Split data into training and testing periods
-            train_end_idx = len(timestamps) // 3  # Use first 1/3 for training
-            train_timestamps = timestamps[:train_end_idx]
-            test_timestamps = timestamps[train_end_idx:]
+        train_data = combined_data[combined_data['timestamp'] <= train_end]
+        test_data = combined_data[(combined_data['timestamp'] > train_end) & (combined_data['timestamp'] <= test_end)]
+        
+        if train_data.empty or test_data.empty:
+            logger.error("Insufficient data for training or testing")
+            return {'portfolio_history': []}
             
-            logger.info(f"Training period: {train_timestamps[0]} to {train_timestamps[-1]}")
-            logger.info(f"Testing period: {test_timestamps[0]} to {test_timestamps[-1]}")
+        logger.info(f"Training data: {len(train_data)} rows from {train_data['timestamp'].min()} to {train_data['timestamp'].max()}")
+        logger.info(f"Testing data: {len(test_data)} rows from {test_data['timestamp'].min()} to {test_data['timestamp'].max()}")
+        
+        # Initialize portfolio
+        portfolio = {
+            'cash': self.initial_capital,
+            'positions': {},
+            'timestamp': test_data['timestamp'].min(),
+            'portfolio_value': self.initial_capital,
+            'equity': self.initial_capital,
+        }
+        
+        # Get the strategy from config
+        strategy = self.config.get('strategy')
+        if not strategy:
+            logger.error("No strategy provided in config")
+            return {'portfolio_history': []}
+        
+        # Prepare data using strategy
+        prepared_train_data = strategy.prepare_data(train_data)
+        
+        # Record portfolio history
+        portfolio_history = []
+        
+        # Group test data by timestamp for iteration
+        timestamps = test_data['timestamp'].unique()
+        timestamps = sorted(timestamps)
+        
+        # Process each timestamp in the test period
+        for i, timestamp in enumerate(timestamps):
+            # Get data for current timestamp
+            current_data = test_data[test_data['timestamp'] == timestamp].copy()
             
-            # Process testing period
-            for timestamp in test_timestamps:
-                try:
-                    # Get data for current timestamp
-                    group = data[data['timestamp'] == timestamp]
-                    
-                    # Update existing positions
-                    self._update_positions(portfolio, group)
-                    
-                    # Get ML trading signals if enabled
-                    if self.use_ml_strategy:
-                        ml_signals = self.ml_strategy.get_signals(group, portfolio)
-                        
-                        # Execute ML trades
-                        for token, signal in ml_signals.items():
-                            if signal['action'] == 'buy' and token not in portfolio['positions'] and len(portfolio['positions']) < self.max_positions:
-                                logger.info(f"ML BUY signal for {token} at {signal['price']} with confidence {signal['confidence']:.4f}")
-                                self._execute_trade(portfolio, token, 'buy', signal['price'], timestamp, signal['confidence'])
-                            elif signal['action'] == 'sell' and token in portfolio['positions']:
-                                logger.info(f"ML SELL signal for {token} at {signal['price']} with confidence {signal['confidence']:.4f}")
-                                self._execute_trade(portfolio, token, 'sell', signal['price'], timestamp, signal['confidence'], 'ml_prediction')
-                    
-                    # Use traditional strategy as fallback or in addition to ML
-                    for token in group['token'].unique():
-                        # Skip if we already have a position or if max positions reached
-                        if token in portfolio['positions'] or len(portfolio['positions']) >= self.max_positions:
-                            continue
-                            
-                        token_data = group[group['token'] == token]
-                        
-                        # Skip if not enough data
-                        if len(token_data) < 2:
-                            continue
-                            
-                        # Calculate basic signals
-                        # Check if 'close' exists, otherwise use 'price'
-                        if 'close' in token_data.columns:
-                            price = token_data['close'].iloc[-1]
-                        elif 'price' in token_data.columns:
-                            price = token_data['price'].iloc[-1]
-                        else:
-                            logger.warning(f"No price data found for {token}, skipping")
-                            continue
-                        
-                        # Calculate price change (handle first row)
-                        token_prev_data = data[(data['token'] == token) & (data['timestamp'] < timestamp)].sort_values('timestamp')
-                        if len(token_prev_data) >= 1:
-                            # Check if 'close' exists, otherwise use 'price'
-                            if 'close' in token_prev_data.columns:
-                                prev_price = token_prev_data['close'].iloc[-1]
-                            elif 'price' in token_prev_data.columns:
-                                prev_price = token_prev_data['price'].iloc[-1]
-                            else:
-                                logger.warning(f"No previous price data found for {token}, using current price")
-                                prev_price = price
-                                
-                            price_change = (price - prev_price) / prev_price
-                        else:
-                            price_change = 0.0
-                            
-                        volume = token_data['volume'].iloc[-1] if 'volume' in token_data.columns else 0
-                        liquidity_score = token_data['liquidity_score'].iloc[-1] if 'liquidity_score' in token_data.columns else 0.5
-                        
-                        # Traditional entry conditions - if ML didn't already generate a signal
-                        if not self.use_ml_strategy or token not in ml_signals:
-                            # Entry conditions with lowered thresholds to generate more trades
-                            volatility_ok = abs(price_change) >= self.vol_threshold * 0.7  # Lower threshold
-                            price_change_ok = price_change > 0.01  # Lower threshold
-                            volume_ok = volume > 50000  # Lower threshold
-                            liquidity_ok = liquidity_score > 0.5  # Lower threshold
-                            
-                            if price_change_ok and volume_ok and liquidity_ok and volatility_ok:
-                                # Update signal history
-                                if token not in self.signal_history:
-                                    self.signal_history[token] = {'buy_signals': 0, 'last_signal_time': None}
-                                    
-                                # Increment buy signals counter
-                                self.signal_history[token]['buy_signals'] += 1
-                                self.signal_history[token]['last_signal_time'] = timestamp
-                                
-                                # Check if we have enough confirmation signals
-                                if self.signal_history[token]['buy_signals'] >= self.entry_confirmation:
-                                    logger.info(f"Traditional BUY signal for {token} at {price:.6f} (price_change: {price_change:.2%}, volume: {volume:.0f}, liquidity: {liquidity_score:.2f})")
-                                    self._execute_trade(portfolio, token, 'buy', price, timestamp, liquidity_score)
-                                    # Reset counter after trade
-                                    self.signal_history[token]['buy_signals'] = 0
+            # Prepare data for this timestamp
+            # We need to include some past data for proper indicator calculation
+            lookback_data = combined_data[
+                (combined_data['timestamp'] <= timestamp) & 
+                (combined_data['timestamp'] > timestamp - pd.Timedelta(days=30))
+            ]
+            prepared_data = strategy.prepare_data(lookback_data)
+            current_prepared = prepared_data[prepared_data['timestamp'] == timestamp]
+            
+            # Update portfolio based on market data
+            self._update_portfolio_values(portfolio, current_data)
+            
+            # Update positions for trailing stops
+            self._check_stop_conditions(portfolio, current_data)
+            
+            # Get signals if we have capacity for new positions
+            if len(portfolio['positions']) < self.max_positions:
+                signals = strategy.get_signals(prepared_data, portfolio)
+                
+                # Execute signals if we have available capital
+                if portfolio['cash'] > 0:
+                    self._execute_signals(portfolio, signals, current_data, timestamp)
                             
                     # Record portfolio state
-                    portfolio_value = self._calculate_portfolio_value(portfolio, group)
-                    portfolio['history'].append({
-                        'timestamp': timestamp,
-                        'portfolio_value': portfolio_value,
-                        'cash': portfolio['cash'],
-                        'n_positions': len(portfolio['positions'])
-                    })
-                    
-                except Exception as e:
-                    logger.error(f"Error processing timestamp {timestamp}: {e}")
-                    import traceback
-                    logger.error(traceback.format_exc())
-                    continue
-                
-            # Calculate final results
-            if portfolio['history']:
-                logger.info(f"Calculating final results from {len(portfolio['history'])} portfolio snapshots")
-                history_df = pd.DataFrame(portfolio['history'])
-                
-                # Calculate returns
-                history_df['returns'] = history_df['portfolio_value'].pct_change().fillna(0)
-                
-                # Calculate metrics
-                total_return = (history_df['portfolio_value'].iloc[-1] / self.initial_capital) - 1
-                daily_returns = history_df['returns'].fillna(0)
-                volatility = daily_returns.std() * np.sqrt(252)
-                sharpe_ratio = (daily_returns.mean() * 252) / volatility if volatility != 0 else 0
-                max_drawdown = (history_df['portfolio_value'] / history_df['portfolio_value'].cummax() - 1).min()
-                win_rate = len(daily_returns[daily_returns > 0]) / len(daily_returns)
-                
-                results.update({
-                    'total_return': total_return,
-                    'sharpe_ratio': sharpe_ratio,
-                    'max_drawdown': max_drawdown,
-                    'win_rate': win_rate,
-                    'platform_metrics': self._calculate_platform_metrics()
-                })
-                
-                logger.info(f"Backtest completed successfully with return: {total_return:.2%}")
+            snapshot = self._create_portfolio_snapshot(portfolio, timestamp)
+            portfolio_history.append(snapshot)
+            
+            # Log progress periodically
+            if i % 100 == 0 or i == len(timestamps) - 1:
+                logger.info(f"Processed {i+1}/{len(timestamps)} timestamps - Portfolio value: ${portfolio['portfolio_value']:.2f}")
+        
+        # Calculate performance metrics
+        results = {
+            'portfolio_history': portfolio_history,
+            'initial_capital': self.initial_capital,
+            'final_portfolio_value': portfolio['portfolio_value'],
+            'total_return': (portfolio['portfolio_value'] / self.initial_capital) - 1,
+        }
+        
+        logger.info(f"Backtest completed - Final portfolio value: ${results['final_portfolio_value']:.2f}")
+        logger.info(f"Total return: {results['total_return']:.2%}")
                 
             return results
-            
-        except Exception as e:
-            logger.error(f"Error in backtest: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            raise
             
     async def _collect_token_data(self, token: str, start_date: datetime, end_date: datetime, data_collector) -> Optional[pd.DataFrame]:
         """Collect and process data for a single token"""
         try:
-            # Get price history
-            price_data = await data_collector.get_price_history(token, start_date, end_date)
+            # Get historical data using the data_collector's get_historical_data method
+            price_data = await data_collector.get_historical_data(token, start_date, end_date)
             
             # Check if data is already a DataFrame
             if isinstance(price_data, pd.DataFrame):
                 if price_data.empty:
                     logger.warning(f"No price data found for {token}")
                     return None
-            # Convert dictionary to DataFrame
-            elif isinstance(price_data, dict):
-                if not price_data or 'prices' not in price_data or not price_data['prices']:
-                    logger.warning(f"No price data found for {token}")
-                    return None
-                
-                # Convert the price data from dictionary to DataFrame
-                prices = price_data.get('prices', [])
-                volumes = price_data.get('total_volumes', [])
-                liquidities = price_data.get('liquidity', [])
-                
-                # Create records
-                records = []
-                for i, (timestamp, price) in enumerate(prices):
-                    # Convert millisecond timestamp to datetime
-                    dt = datetime.fromtimestamp(timestamp / 1000)
-                    
-                    # Get volume if available
-                    volume = volumes[i][1] if i < len(volumes) else 0
-                    
-                    # Get liquidity if available
-                    liquidity = liquidities[i][1] if i < len(liquidities) else 1000000
-                    
-                    records.append({
-                        'timestamp': dt,
-                        'price': price,
-                        'volume': volume,
-                        'token': token,
-                        'liquidity_score': liquidity / 1000000.0  # Normalize to 0-1 range
-                    })
-                
-                price_data = pd.DataFrame(records)
-            else:
-                logger.warning(f"Unexpected data type for {token}: {type(price_data)}")
-                return None
-            
-            # Add token info if not already there
+                # Make sure we have the token column
             if 'token' not in price_data.columns:
                 price_data['token'] = token
                 
-            # Add liquidity score if not already there
+                # Add liquidity score if not present
             if 'liquidity_score' not in price_data.columns:
-                # Try to get liquidity data
-                try:
-                    liquidity_data = await data_collector.get_liquidity_data(token)
-                    liquidity_score = data_collector.calculate_liquidity_score(liquidity_data)
-                    price_data['liquidity_score'] = liquidity_score
-                except:
-                    # Default liquidity score
-                    price_data['liquidity_score'] = 0.7
+                    price_data['liquidity_score'] = 0.7  # Default liquidity score
             
             return price_data
+            else:
+                logger.warning(f"Unexpected data type for {token}: {type(price_data)}")
+                return None
             
         except Exception as e:
             logger.error(f"Error collecting data for {token}: {e}")
@@ -574,60 +423,124 @@ class BacktestEngine:
                 
         return total_value
         
-    def generate_report(self, results: pd.DataFrame) -> Dict:
-        """Generate performance report"""
+    def generate_report(self, portfolio_history):
+        """Generate backtest performance report"""
         try:
-            total_days = (results['timestamp'].max() - results['timestamp'].min()).days
+            # Convert list of dictionaries to DataFrame for easier analysis
+            results = pd.DataFrame(portfolio_history)
             
-            # Calculate metrics
-            total_return = results['portfolio_value'].iloc[-1] / results['portfolio_value'].iloc[0] - 1
-            daily_returns = results['returns'].fillna(0)
+            # Calculate returns
+            results['returns'] = results['portfolio_value'].pct_change().fillna(0)
+            results['cumulative_returns'] = (1 + results['returns']).cumprod() - 1
+            
+            # Calculate basic metrics
+            initial_capital = results['portfolio_value'].iloc[0]
+            final_capital = results['portfolio_value'].iloc[-1]
+            total_return = final_capital / initial_capital - 1
+            
+            total_days = (results['timestamp'].max() - results['timestamp'].min()).total_seconds() / 86400  # Convert to days
+            annualized_return = (1 + total_return) ** (365 / total_days) - 1 if total_days > 0 else 0
             
             # Risk metrics
+            daily_returns = results['returns'].fillna(0)
             volatility = daily_returns.std() * np.sqrt(365)
             sharpe_ratio = (daily_returns.mean() * 365) / volatility if volatility != 0 else 0
             max_drawdown = (results['portfolio_value'] / results['portfolio_value'].cummax() - 1).min()
             
+            # Trade statistics
+            if 'trades' in results.columns:
+                trades = results['trades'].explode().dropna().tolist()
+            else:
+                trades = []
+                
+            total_trades = len(trades)
+            winning_trades = [t for t in trades if t.get('pnl', 0) > 0]
+            losing_trades = [t for t in trades if t.get('pnl', 0) <= 0]
+            
+            win_rate = len(winning_trades) / total_trades if total_trades > 0 else 0
+            avg_win = np.mean([t['pnl'] for t in winning_trades]) if winning_trades else 0
+            avg_loss = np.mean([t['pnl'] for t in losing_trades]) if losing_trades else 0
+            profit_factor = -sum(t['pnl'] for t in winning_trades) / sum(t['pnl'] for t in losing_trades) if losing_trades else float('inf')
+            
             report = {
+                'initial_capital': initial_capital,
+                'final_capital': final_capital,
                 'total_return': total_return,
-                'annualized_return': (1 + total_return) ** (365 / total_days) - 1 if total_days > 0 else 0,
-                'sharpe_ratio': sharpe_ratio,
+                'annualized_return': annualized_return,
                 'volatility': volatility,
+                'sharpe_ratio': sharpe_ratio,
                 'max_drawdown': max_drawdown,
-                'win_rate': len(daily_returns[daily_returns > 0]) / len(daily_returns),
-                'avg_trade_duration': timedelta(days=7),  # Placeholder
-                'total_fees': 1000,  # Placeholder
-                'avg_slippage': 0.001,  # Placeholder
-                'avg_liquidity_score': 0.8  # Placeholder
+                'win_rate': win_rate,
+                'avg_win': avg_win,
+                'avg_loss': avg_loss,
+                'profit_factor': profit_factor,
+                'total_trades': total_trades,
+                'output_dir': self.config.get('backtest', {}).get('output_dir', 'backtest_results')
             }
             
             return report
             
         except Exception as e:
             logger.error(f"Error generating report: {e}")
-            raise
+            # Return a default report instead of raising
+            return {
+                'initial_capital': self.initial_capital,
+                'final_capital': self.initial_capital,
+                'total_return': 0.0,
+                'annualized_return': 0.0,
+                'max_drawdown': 0.0,
+                'sharpe_ratio': 0.0,
+                'win_rate': 0.0,
+                'avg_win': 0.0,
+                'avg_loss': 0.0,
+                'profit_factor': 0.0,
+                'total_trades': 0,
+                'output_dir': self.config.get('backtest', {}).get('output_dir', 'backtest_results')
+            }
             
-    def plot_results(self, results: pd.DataFrame, output_path: str):
-        """Plot backtest results"""
+    def plot_results(self, portfolio_history, output_path: str):
+        """
+        Plot portfolio performance over time
+        
+        Args:
+            portfolio_history: List of dictionaries containing portfolio history
+            output_path: Path to save the plot
+        """
         try:
-            plt.figure(figsize=(12, 8))
+            # Convert to DataFrame if it's a list
+            if isinstance(portfolio_history, list):
+                results = pd.DataFrame(portfolio_history)
+            else:
+                results = portfolio_history
+                
+            # If there are no results, create an empty chart
+            if results.empty:
+                self.plot_empty_chart(output_path)
+                return
+                
+            # Calculate returns if not present
+            if 'returns' not in results.columns:
+                results['returns'] = results['portfolio_value'].pct_change()
+                
+            if 'cumulative_returns' not in results.columns:
+                results['cumulative_returns'] = (1 + results['returns']).cumprod() - 1
+            
+            # Create figure with two subplots
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), gridspec_kw={'height_ratios': [2, 1]})
             
             # Plot portfolio value
-            plt.subplot(2, 1, 1)
-            plt.plot(results['timestamp'], results['portfolio_value'], label='Portfolio Value')
-            plt.title('Backtest Results')
-            plt.xlabel('Date')
-            plt.ylabel('Portfolio Value ($)')
-            plt.grid(True)
-            plt.legend()
+            ax1.plot(results.index, results['portfolio_value'], label='Portfolio Value', color='blue')
+            ax1.set_title('Portfolio Performance')
+            ax1.set_ylabel('Portfolio Value ($)')
+            ax1.legend()
+            ax1.grid(True)
             
-            # Plot returns
-            plt.subplot(2, 1, 2)
-            plt.plot(results['timestamp'], results['cumulative_returns'], label='Cumulative Returns')
-            plt.xlabel('Date')
-            plt.ylabel('Cumulative Returns')
-            plt.grid(True)
-            plt.legend()
+            # Plot cumulative returns
+            ax2.plot(results.index, results['cumulative_returns'] * 100, label='Cumulative Returns (%)', color='green')
+            ax2.set_xlabel('Date')
+            ax2.set_ylabel('Returns (%)')
+            ax2.legend()
+            ax2.grid(True)
             
             plt.tight_layout()
             plt.savefig(output_path)
@@ -635,20 +548,262 @@ class BacktestEngine:
             
         except Exception as e:
             logger.error(f"Error plotting results: {e}")
-            raise
+            # Create a simple error message plot
+            plt.figure(figsize=(10, 6))
+            plt.text(0.5, 0.5, f"Error generating plot: {e}", 
+                     horizontalalignment='center', verticalalignment='center')
+            plt.savefig(output_path)
+            plt.close()
+            
+    def plot_empty_chart(self, output_path: str):
+        """
+        Create a chart for when no trades were executed
         
-    def _update_portfolio_value(self, current_date: datetime, prepared_data: Dict[str, Dict]):
+        Args:
+            output_path: Path to save the plot
+        """
+        try:
+            # Create figure
+            fig, ax = plt.subplots(figsize=(12, 8))
+            
+            # Add text explaining no trades
+            ax.text(0.5, 0.5, "No trades were executed during the backtest period", 
+                    horizontalalignment='center', verticalalignment='center',
+                    fontsize=16)
+            
+            # Add a flat line representing no change in portfolio value
+            dates = [datetime.now() - timedelta(days=30), datetime.now()]
+            values = [self.initial_capital, self.initial_capital]
+            ax.plot(dates, values, 'b-')
+            
+            ax.set_title('Backtest Results - No Trades')
+            ax.set_ylabel('Portfolio Value ($)')
+            ax.grid(True)
+            
+            plt.tight_layout()
+            plt.savefig(output_path)
+            plt.close()
+            
+        except Exception as e:
+            logger.error(f"Error creating empty chart: {e}")
+            # Create a very simple error message
+            plt.figure(figsize=(10, 6))
+            plt.text(0.5, 0.5, "No trades executed", 
+                     horizontalalignment='center', verticalalignment='center')
+            plt.savefig(output_path)
+            plt.close()
+        
+    def _update_portfolio_values(self, portfolio: Dict, current_data: pd.DataFrame):
         """Update portfolio value based on current positions"""
-        portfolio_value = self.initial_capital
+        # Start with cash
+        portfolio_value = portfolio['cash']
         
-        for symbol, position in self.positions.items():
-            if symbol in prepared_data:
-                current_price = self._get_best_price(current_date, prepared_data[symbol]['market_data'])
-                if current_price is not None:
-                    position_value = position['size'] * current_price
-                    portfolio_value += position_value - position['cost_basis']
-                    
-        self.portfolio_value = portfolio_value
+        # Add value of each position
+        for token, position in portfolio['positions'].items():
+            token_data = current_data[current_data['token'] == token]
+            if not token_data.empty:
+                # Get current price
+                current_price = token_data['close'].iloc[0]
+                position['current_price'] = current_price
+                position['current_value'] = position['quantity'] * current_price
+                portfolio_value += position['current_value']
+        
+        # Update portfolio value
+        portfolio['portfolio_value'] = portfolio_value
+        portfolio['equity'] = portfolio_value
+        
+    def _check_stop_conditions(self, portfolio: Dict, current_data: pd.DataFrame):
+        """Check if any positions need to be closed due to stop conditions"""
+        positions_to_close = []
+        
+        for token, position in list(portfolio['positions'].items()):
+            token_data = current_data[current_data['token'] == token]
+            if token_data.empty:
+                continue
+                
+            # Get current price
+            current_price = token_data['close'].iloc[0]
+            position['current_price'] = current_price
+            
+            # Calculate unrealized P&L
+            entry_price = position['entry_price']
+            is_long = position['direction'] == 'long'
+            
+            if is_long:
+                unrealized_pnl_pct = (current_price - entry_price) / entry_price
+            else:
+                unrealized_pnl_pct = (entry_price - current_price) / entry_price
+                
+            # Check stop loss
+            if position.get('stop_loss') and unrealized_pnl_pct <= -position['stop_loss']:
+                positions_to_close.append((token, 'stop_loss'))
+                continue
+                
+            # Check take profit
+            if position.get('take_profit') and unrealized_pnl_pct >= position['take_profit']:
+                positions_to_close.append((token, 'take_profit'))
+                continue
+                
+            # Check trailing stop
+            if self.trailing_stop_pct and 'highest_price' in position:
+                if is_long:
+                    # For long positions, trail below the highest price
+                    trailing_stop_price = position['highest_price'] * (1 - self.trailing_stop_pct)
+                    if current_price <= trailing_stop_price and current_price > entry_price:
+                        positions_to_close.append((token, 'trailing_stop'))
+                        continue
+                else:
+                    # For short positions, trail above the lowest price
+                    trailing_stop_price = position['lowest_price'] * (1 + self.trailing_stop_pct)
+                    if current_price >= trailing_stop_price and current_price < entry_price:
+                        positions_to_close.append((token, 'trailing_stop'))
+                        continue
+                        
+            # Update highest/lowest price seen
+            if is_long:
+                if 'highest_price' not in position:
+                    position['highest_price'] = max(entry_price, current_price)
+                else:
+                    position['highest_price'] = max(position['highest_price'], current_price)
+            else:
+                if 'lowest_price' not in position:
+                    position['lowest_price'] = min(entry_price, current_price)
+                else:
+                    position['lowest_price'] = min(position['lowest_price'], current_price)
+        
+        # Close positions that hit exit conditions
+        for token, reason in positions_to_close:
+            self._close_position(portfolio, token, reason, current_data)
+            
+    def _execute_signals(self, portfolio: Dict, signals: Dict, current_data: pd.DataFrame, timestamp: datetime):
+        """Execute trading signals"""
+        for token, signal in signals.items():
+            # Skip if we already have a position in this token
+            if token in portfolio['positions']:
+                continue
+                
+            # Skip if we've reached max positions
+            if len(portfolio['positions']) >= self.max_positions:
+                break
+                
+            # Check if we have a valid signal
+            if signal['signal'] == 0:
+                continue
+                
+            # Get token data
+            token_data = current_data[current_data['token'] == token]
+            if token_data.empty:
+                continue
+                
+            # Get current price
+            current_price = token_data['close'].iloc[0]
+            
+            # Determine position direction
+            direction = 'long' if signal['signal'] > 0 else 'short'
+            
+            # Calculate position size
+            position_size = portfolio['cash'] * self.position_size_pct
+            
+            # Apply leverage if available
+            leverage = signal.get('leverage', 1.0)
+            position_size *= leverage
+            
+            # Calculate quantity
+            quantity = position_size / current_price
+            
+            # Open position
+            self._open_position(
+                portfolio=portfolio,
+                token=token,
+                direction=direction,
+                quantity=quantity,
+                price=current_price,
+                timestamp=timestamp,
+                stop_loss=signal.get('stop_loss'),
+                take_profit=signal.get('take_profit'),
+                leverage=leverage
+            )
+            
+    def _open_position(self, portfolio: Dict, token: str, direction: str, quantity: float, 
+                      price: float, timestamp: datetime, stop_loss: float = None, 
+                      take_profit: float = None, leverage: float = 1.0):
+        """Open a new position"""
+        # Calculate position cost
+        position_cost = quantity * price / leverage  # Adjust for leverage
+        
+        # Check if we have enough cash
+        if position_cost > portfolio['cash']:
+            logger.warning(f"Not enough cash to open position in {token}")
+            return
+            
+        # Deduct cost from cash
+        portfolio['cash'] -= position_cost
+        
+        # Create position
+        portfolio['positions'][token] = {
+            'token': token,
+            'direction': direction,
+            'quantity': quantity,
+            'entry_price': price,
+            'entry_time': timestamp,
+            'current_price': price,
+            'current_value': quantity * price,
+            'stop_loss': stop_loss,
+            'take_profit': take_profit,
+            'leverage': leverage,
+            'cost': position_cost
+        }
+        
+        logger.info(f"Opened {direction} position in {token}: {quantity:.6f} @ {price:.6f} (leverage: {leverage:.1f}x)")
+        
+    def _close_position(self, portfolio: Dict, token: str, reason: str, current_data: pd.DataFrame):
+        """Close an existing position"""
+        if token not in portfolio['positions']:
+            return
+            
+        position = portfolio['positions'][token]
+        
+        # Get current price
+        token_data = current_data[current_data['token'] == token]
+        if token_data.empty:
+            logger.warning(f"No price data available to close position in {token}")
+            return
+            
+        close_price = token_data['close'].iloc[0]
+        
+        # Calculate P&L
+        entry_price = position['entry_price']
+        quantity = position['quantity']
+        direction = position['direction']
+        leverage = position.get('leverage', 1.0)
+        
+        if direction == 'long':
+            pnl = (close_price - entry_price) * quantity * leverage
+        else:
+            pnl = (entry_price - close_price) * quantity * leverage
+            
+        # Add value back to cash
+        position_value = quantity * close_price / leverage  # Adjust for leverage
+        portfolio['cash'] += position_value + pnl
+        
+        # Log the trade
+        pnl_pct = pnl / position['cost'] * 100
+        logger.info(f"Closed {direction} position in {token}: {quantity:.6f} @ {close_price:.6f} | " +
+                   f"P&L: ${pnl:.2f} ({pnl_pct:.2f}%) | Reason: {reason}")
+        
+        # Remove position
+        del portfolio['positions'][token]
+        
+    def _create_portfolio_snapshot(self, portfolio: Dict, timestamp: datetime) -> Dict:
+        """Create a snapshot of the current portfolio state"""
+        return {
+            'timestamp': timestamp,
+            'portfolio_value': portfolio['portfolio_value'],
+            'cash': portfolio['cash'],
+            'equity': portfolio['equity'],
+            'positions': len(portfolio['positions']),
+            'position_details': {token: pos.copy() for token, pos in portfolio['positions'].items()}
+        }
         
     def _get_market_data(self, current_date: datetime, prepared_data: Dict[str, Dict]) -> Dict:
         """Get current market data for all symbols"""

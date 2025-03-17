@@ -8,6 +8,8 @@ A trading platform focused on Solana memecoins, leveraging market data for optim
 - Volatility-based trade signals
 - Advanced position management with trailing stops
 - Backtesting engine with detailed performance metrics
+- Pattern-based trading strategy with margin support
+- Dynamic risk management with ATR-based stop losses
 
 ## Setup Instructions
 
@@ -35,30 +37,52 @@ The application uses Helius API for retrieving Solana token data. To get your fr
    HELIUS_API_KEY=your_api_key_here
    ```
 
+## Available Strategies
+
+### ML Strategy
+Machine learning-based strategy that predicts price movements based on historical patterns.
+
+### Pattern Strategy
+Technical analysis strategy that identifies trading opportunities using candlestick patterns, support/resistance levels, and technical indicators. Supports both long and short positions with configurable leverage.
+
+Key features:
+- Margin trading with up to 3x leverage
+- Dynamic ATR-based stop loss and take profit levels
+- Trailing stops to lock in profits
+- Multiple pattern recognition techniques
+
+For detailed documentation, see [Pattern Strategy Docs](docs/pattern_strategy.md).
+
 ## Running Backtests
 
-To run a backtest with the current configuration:
+To run a backtest with the ML strategy:
 
 ```bash
 python -m scripts.run_jupiter_backtest
 ```
 
-This will:
-1. Fetch the top Solana memecoins by market cap
-2. Retrieve price history using the Helius API
-3. Run the backtest with the configured trading parameters
-4. Generate a performance report
+To run a backtest with the pattern strategy:
+
+```bash
+python -m scripts.run_pattern_backtest
+```
+
+These will:
+1. Load the historical price data from CSV files in the `backtesting` directory
+2. Run the backtest with the configured trading parameters
+3. Generate a performance report and charts
 
 ## Trading Parameters
 
 The trading strategy uses the following parameters:
 
 - Position size: 5% of portfolio per trade
-- Stop loss: 15% from entry
-- Take profit: 30% from entry  
-- Trailing stop: 10% to lock in profits
-- Maximum positions: 10 at any time
+- Stop loss: Dynamic based on ATR (Average True Range)
+- Take profit: Dynamic based on ATR
+- Trailing stop: 1.5% to lock in profits
+- Maximum positions: 3 at any time
+- Maximum leverage: 3x (configurable)
 
 ## Results
 
-Backtest results are stored in the `backtest_results/` directory. 
+Backtest results are stored in the `backtest_results/` directory. Performance charts and detailed metrics are available for each strategy. 

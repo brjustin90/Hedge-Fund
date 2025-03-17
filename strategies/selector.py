@@ -2,6 +2,7 @@ import logging
 import pandas as pd
 import numpy as np
 from typing import Dict, List
+from strategies.pattern_strategy import PatternStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -9,16 +10,26 @@ class StrategySelector:
     def __init__(self, config: Dict):
         self.config = config
         self.strategy_weights = config.get('strategy_weights', {
-            'trend_following': 0.4,
-            'mean_reversion': 0.3,
-            'momentum': 0.2,
-            'liquidity': 0.1
+            'trend_following': 0.3,
+            'mean_reversion': 0.2,
+            'momentum': 0.15,
+            'liquidity': 0.05,
+            'pattern': 0.3
         })
+        
+        # Initialize pattern strategy
+        self.pattern_strategy = PatternStrategy(config)
         
     def get_signals(self, data: pd.DataFrame, portfolio: Dict) -> Dict:
         """Generate trading signals from all strategies"""
         try:
             signals = {}
+            
+            # Process data with pattern strategy
+            processed_data = self._prepare_data_for_strategies(data)
+            
+            # Get pattern strategy signals
+            pattern_signals = self.pattern_strategy.get_signals(processed_data, portfolio)
             
             for token, token_data in data.groupby('token'):
                 # Skip if we already have a position in this token
@@ -31,37 +42,75 @@ class StrategySelector:
                 momentum_signal = self._momentum_strategy(token_data)
                 liquidity_signal = self._liquidity_strategy(token_data)
                 
+                # Get pattern signal (default to 0 if not available)
+                pattern_signal = 0
+                if token in pattern_signals:
+                    pattern_signal = pattern_signals[token].get('signal', 0)
+                
                 # Combine signals using strategy weights
                 combined_signal = (
                     trend_signal * self.strategy_weights['trend_following'] +
                     mean_rev_signal * self.strategy_weights['mean_reversion'] +
                     momentum_signal * self.strategy_weights['momentum'] +
-                    liquidity_signal * self.strategy_weights['liquidity']
+                    liquidity_signal * self.strategy_weights['liquidity'] +
+                    pattern_signal * self.strategy_weights['pattern']
                 )
+                
+                # Get current price - check if 'close' exists, otherwise use 'price'
+                if 'close' in token_data.columns:
+                    price = token_data['close'].iloc[-1]
+                elif 'price' in token_data.columns:
+                    price = token_data['price'].iloc[-1]
+                else:
+                    logger.warning(f"No price data found for {token}, skipping signal generation")
+                    continue
+                    
+                # Calculate confidence based on signal strength
+                confidence = min(abs(combined_signal), 1.0)
+                
+                # Calculate position leverage if pattern strategy provided it
+                leverage = 1.0
+                if token in pattern_signals:
+                    leverage = pattern_signals[token].get('leverage', 1.0)
                 
                 # Generate trading decision
                 if abs(combined_signal) > 0.5:  # Threshold for taking action
-                    # Get current price - check if 'close' exists, otherwise use 'price'
-                    if 'close' in token_data.columns:
-                        price = token_data['close'].iloc[-1]
-                    elif 'price' in token_data.columns:
-                        price = token_data['price'].iloc[-1]
-                    else:
-                        logger.warning(f"No price data found for {token}, skipping signal generation")
-                        continue
+                    # Extract stop loss and take profit from pattern strategy if available
+                    stop_loss = None
+                    take_profit = None
+                    if token in pattern_signals:
+                        stop_loss = pattern_signals[token].get('stop_loss')
+                        take_profit = pattern_signals[token].get('take_profit')
                     
+                    # Use default values if not provided by pattern strategy
+                    if stop_loss is None:
+                        stop_loss = 0.05  # Default 5% stop loss
+                    if take_profit is None:
+                        take_profit = 0.15  # Default 15% take profit
+                        
                     signals[token] = {
-                        'action': 'buy' if combined_signal > 0 else 'sell',
+                        'signal': 1 if combined_signal > 0 else -1,  # 1 for buy, -1 for sell
+                        'confidence': confidence,
                         'price': price,
-                        'confidence': abs(combined_signal)
+                        'stop_loss': stop_loss,
+                        'take_profit': take_profit,
+                        'leverage': leverage
                     }
-                    
+            
             return signals
             
         except Exception as e:
             logger.error(f"Error generating signals: {e}")
             return {}
             
+    def _prepare_data_for_strategies(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Prepare data for all strategies, especially the pattern strategy"""
+        # Create a copy to avoid modifying the original
+        processed_data = data.copy()
+        
+        # Use the pattern strategy's prepare_data method
+        return self.pattern_strategy.prepare_data(processed_data)
+        
     def _trend_following_strategy(self, data: pd.DataFrame) -> float:
         """
         Simple trend following strategy based on moving average crossover
